@@ -1,5 +1,6 @@
 #include "esca/vision/client.hpp"
 
+#include <chrono>
 #include <mutex>
 
 #include <sdbus-c++/sdbus-c++.h>
@@ -75,11 +76,21 @@ bool VisionClient::connect(std::string &error)
     }
 
     // Does the service actually answer? Subscribing to a signal succeeds even
-    // when nobody is there to send it, so ask something.
-    bool running = false;
-    std::string model;
-    double avg_ms = 0.0;
-    return state(running, model, avg_ms, error);
+    // when nobody is there to send it, so ask something -- but briefly. The
+    // D-Bus default is 25 seconds, and a viewer should fall back to plain
+    // video in a moment rather than show nothing while a sick service is
+    // timing out.
+    sdbus::Struct<bool, std::string, double, uint32_t> probe;
+    try {
+        impl_->proxy->callMethod("GetState")
+            .onInterface(kInterface)
+            .withTimeout(std::chrono::seconds(2))
+            .storeResultsTo(probe);
+    } catch (const sdbus::Error &e) {
+        error = e.getMessage();
+        return false;
+    }
+    return true;
 }
 
 bool VisionClient::start(std::string &error)

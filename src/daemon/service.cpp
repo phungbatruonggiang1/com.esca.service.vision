@@ -50,7 +50,12 @@ VisionService::VisionService(sdbus::IConnection &connection, const Config &confi
 
 VisionService::~VisionService()
 {
-    stop_worker();
+    // Safe to block here, unlike in stop_worker(): the event loop has already
+    // left, so a signal the worker is still emitting cannot be waiting on a
+    // lock this thread holds.
+    running_ = false;
+    if (worker_.joinable())
+        worker_.join();
 }
 
 bool VisionService::load(std::string &error)
@@ -145,11 +150,26 @@ bool VisionService::start_worker(std::string &error)
     if (running_)
         return true;
 
+    // A previous run may still be winding down. Joining it here is safe only
+    // because worker_alive_ says it has already returned, so join() does not
+    // block -- see stop_worker() for why blocking here would deadlock.
+    if (worker_alive_) {
+        error = "the previous run has not finished yet; try again in a moment";
+        return false;
+    }
+    if (worker_.joinable())
+        worker_.join();
+
     running_ = true;
+    worker_alive_ = true;
     try {
-        worker_ = std::thread([this] { run(); });
+        worker_ = std::thread([this] {
+            run();
+            worker_alive_ = false;
+        });
     } catch (const std::exception &e) {
         running_ = false;
+        worker_alive_ = false;
         error = std::string("cannot start worker: ") + e.what();
         return false;
     }
@@ -158,16 +178,19 @@ bool VisionService::start_worker(std::string &error)
 
 void VisionService::stop_worker()
 {
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (!running_)
-            return;
-        running_ = false;
-    }
-    // next_frame() returns within the frame timeout, so the thread notices
-    // the flag without needing to be interrupted.
-    if (worker_.joinable())
-        worker_.join();
+    // Only raise the flag. The worker notices it within one frame timeout and
+    // returns on its own.
+    //
+    // It must not be joined here. This runs on the bus thread inside a D-Bus
+    // method handler, and sdbus-c++ holds the connection's lock for the whole
+    // handler; the worker emits Detections on that same connection, so it
+    // would block on that lock while the handler blocked on join() -- both
+    // threads stuck, the service never answering another call again. That
+    // deadlock is exactly what happened the first time this was written.
+    //
+    // The destructor does join, which is safe: by then the event loop has
+    // exited and nothing holds the connection lock.
+    running_ = false;
 }
 
 void VisionService::run()

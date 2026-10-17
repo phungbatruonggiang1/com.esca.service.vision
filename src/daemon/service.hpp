@@ -62,7 +62,8 @@ private:
 
     mutable std::mutex mutex_;
     std::thread worker_;
-    std::atomic<bool> running_{ false };
+    std::atomic<bool> running_{ false };       ///< asked to run
+    std::atomic<bool> worker_alive_{ false };  ///< thread entered and has not returned
     std::atomic<uint32_t> every_{ 3 };
     int clients_ = 0;  ///< Start() calls outstanding; the worker runs while > 0
 
