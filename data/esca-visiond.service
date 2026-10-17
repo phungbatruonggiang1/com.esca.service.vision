@@ -1,0 +1,22 @@
+[Unit]
+Description=ESCA vision service
+# The camera service need not be up yet: the detector only claims a camera
+# once a viewer calls Start(), and reports a fault rather than dying if the
+# camera is missing then.
+Requires=dbus.socket
+After=dbus.socket esca-camerad.service
+
+[Service]
+Type=dbus
+BusName=vn.sparc.esca.Vision1
+ExecStart=/usr/sbin/esca-visiond
+Restart=on-failure
+RestartSec=2
+
+# Root for now, matching the camera service: it is a client of that service
+# and needs no device access of its own, so dropping privileges here is a
+# smaller job than it was there and worth doing separately.
+User=root
+
+[Install]
+WantedBy=multi-user.target
